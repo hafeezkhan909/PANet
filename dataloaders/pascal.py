@@ -29,9 +29,9 @@ class VOC(BaseDataset):
         super().__init__(base_dir)
         self.split = split
         self._image_dir = os.path.join(self._base_dir, 'JPEGImages')
-        self._label_dir = os.path.join(self._base_dir, 'SegmentationClassAug')
-        self._inst_dir = os.path.join(self._base_dir, 'SegmentationObjectAug')
-        self._scribble_dir = os.path.join(self._base_dir, 'ScribbleAugAuto')
+        self._label_dir = os.path.join(self._base_dir, 'SegmentationClass')
+        # self._inst_dir = os.path.join(self._base_dir, 'SegmentationObjectAug')
+        # self._scribble_dir = os.path.join(self._base_dir, 'ScribbleAugAuto')
         self._id_dir = os.path.join(self._base_dir, 'ImageSets', 'Segmentation')
         self.transforms = transforms
         self.to_tensor = to_tensor
@@ -45,14 +45,33 @@ class VOC(BaseDataset):
     def __getitem__(self, idx):
         # Fetch data
         id_ = self.ids[idx]
+        image_path = os.path.join(self._image_dir, f'{id_}.jpg')
         image = Image.open(os.path.join(self._image_dir, f'{id_}.jpg'))
         semantic_mask = Image.open(os.path.join(self._label_dir, f'{id_}.png'))
-        instance_mask = Image.open(os.path.join(self._inst_dir, f'{id_}.png'))
-        scribble_mask = Image.open(os.path.join(self._scribble_dir, f'{id_}.png'))
+        # instance_mask = Image.open(os.path.join(self._inst_dir, f'{id_}.png'))
+        # scribble_mask = Image.open(os.path.join(self._scribble_dir, f'{id_}.png'))
+        # print('Image path: ' ,image_path)
+        # print(image.mode)
+        # print(semantic_mask.mode)
+        # print(instance_mask.mode)
+        # print(scribble_mask.mode)
+        # import numpy as np
+        # image_np = np.array(image)
+        # instance_mask_np = np.array(instance_mask)
+        # scribble_mask_np = np.array(scribble_mask)
+        # semantic_mask_np = np.array(semantic_mask)
+
+        # print("Instance Mask Shape:", instance_mask_np.shape)  # (H, W) for grayscale or (H, W, C) for RGB
+        # print("Scribble Mask Shape:", scribble_mask_np.shape)
+        # print("Semantic Mask Shape:", semantic_mask_np.shape)
+        # print("Image Shape:", image_np.shape)
+
+
         sample = {'image': image,
                   'label': semantic_mask,
-                  'inst': instance_mask,
-                  'scribble': scribble_mask}
+                #   'inst': instance_mask,
+                #   'scribble': scribble_mask,
+                  'filename': image_path}
 
         # Image-level transformation
         if self.transforms is not None:

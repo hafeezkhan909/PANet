@@ -25,7 +25,7 @@ def attrib_basic(_sample, class_id):
     return {'class_id': class_id}
 
 
-def getMask(label, scribble, class_id, class_ids):
+def getMask(label, class_id, class_ids):
     """
     Generate FG/BG mask from the segmentation mask
 
@@ -48,21 +48,21 @@ def getMask(label, scribble, class_id, class_ids):
         bg_mask[label == class_id] = 0
 
     # Scribble Mask
-    bg_scribble = scribble == 0
-    fg_scribble = torch.where((fg_mask == 1)
-                              & (scribble != 0)
-                              & (scribble != 255),
-                              scribble, torch.zeros_like(fg_mask))
-    scribble_cls_list = list(set(np.unique(fg_scribble)) - set([0,]))
-    if scribble_cls_list:  # Still need investigation
-        fg_scribble = fg_scribble == random.choice(scribble_cls_list).item()
-    else:
-        fg_scribble[:] = 0
+    # bg_scribble = scribble == 0
+    # fg_scribble = torch.where((fg_mask == 1)
+    #                           & (scribble != 0)
+    #                           & (scribble != 255),
+    #                           scribble, torch.zeros_like(fg_mask))
+    # scribble_cls_list = list(set(np.unique(fg_scribble)) - set([0,]))
+    # if scribble_cls_list:  # Still need investigation
+    #     fg_scribble = fg_scribble == random.choice(scribble_cls_list).item()
+    # else:
+    #     fg_scribble[:] = 0
 
     return {'fg_mask': fg_mask,
-            'bg_mask': bg_mask,
-            'fg_scribble': fg_scribble.long(),
-            'bg_scribble': bg_scribble.long()}
+            'bg_mask': bg_mask}
+            # 'fg_scribble': fg_scribble.long(),
+            # 'bg_scribble': bg_scribble.long()}
 
 
 def fewShot(paired_sample, n_ways, n_shots, cnt_query, coco=False):
@@ -90,6 +90,8 @@ def fewShot(paired_sample, n_ways, n_shots, cnt_query, coco=False):
     # support images
     support_images = [[paired_sample[cumsum_idx[i] + j]['image'] for j in range(n_shots)]
                       for i in range(n_ways)]
+    support_filenames = [[paired_sample[cumsum_idx[i] + j]['filename'] for j in range(n_shots)]
+                     for i in range(n_ways)]
     support_images_t = [[paired_sample[cumsum_idx[i] + j]['image_t'] for j in range(n_shots)]
                         for i in range(n_ways)]
 
@@ -100,16 +102,18 @@ def fewShot(paired_sample, n_ways, n_shots, cnt_query, coco=False):
     else:
         support_labels = [[paired_sample[cumsum_idx[i] + j]['label'] for j in range(n_shots)]
                           for i in range(n_ways)]
-    support_scribbles = [[paired_sample[cumsum_idx[i] + j]['scribble'] for j in range(n_shots)]
-                         for i in range(n_ways)]
-    support_insts = [[paired_sample[cumsum_idx[i] + j]['inst'] for j in range(n_shots)]
-                     for i in range(n_ways)]
+    # support_scribbles = [[paired_sample[cumsum_idx[i] + j]['scribble'] for j in range(n_shots)]
+    #                      for i in range(n_ways)]
+    # support_insts = [[paired_sample[cumsum_idx[i] + j]['inst'] for j in range(n_shots)]
+    #                  for i in range(n_ways)]
 
 
 
     # query images, masks and class indices
     query_images = [paired_sample[cumsum_idx[i+1] - j - 1]['image'] for i in range(n_ways)
                     for j in range(cnt_query[i])]
+    query_filenames = [paired_sample[cumsum_idx[i+1] - j - 1]['filename'] for i in range(n_ways)
+                   for j in range(cnt_query[i])]
     query_images_t = [paired_sample[cumsum_idx[i+1] - j - 1]['image_t'] for i in range(n_ways)
                       for j in range(cnt_query[i])]
     if coco:
@@ -124,9 +128,13 @@ def fewShot(paired_sample, n_ways, n_shots, cnt_query, coco=False):
 
 
     ###### Generate support image masks ######
-    support_mask = [[getMask(support_labels[way][shot], support_scribbles[way][shot],
+    support_mask = [[getMask(support_labels[way][shot],
                              class_ids[way], class_ids)
                      for shot in range(n_shots)] for way in range(n_ways)]
+
+    # support_mask = [[getMask(support_labels[way][shot], support_scribbles[way][shot],
+    #                          class_ids[way], class_ids)
+    #                  for shot in range(n_shots)] for way in range(n_ways)]
 
 
     ###### Generate query label (class indices in one episode, i.e. the ground truth)######
@@ -156,13 +164,16 @@ def fewShot(paired_sample, n_ways, n_shots, cnt_query, coco=False):
             'support_images_t': support_images_t,
             'support_images': support_images,
             'support_mask': support_mask,
-            'support_inst': support_insts,
+            # 'support_inst': support_insts,
 
             'query_images_t': query_images_t,
             'query_images': query_images,
             'query_labels': query_labels_tmp,
             'query_masks': query_masks,
             'query_cls_idx': query_cls_idx,
+
+            'support_filenames': support_filenames,
+            'query_filenames': query_filenames,
            }
 
 
