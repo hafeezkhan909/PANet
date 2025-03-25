@@ -3,13 +3,16 @@ Fewshot Semantic Segmentation
 """
 
 from collections import OrderedDict
-
+import shutil
+import cv2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import numpy as np
+import os
 from .vgg import Encoder
-
+from PIL import Image
+import torchvision.transforms as T
 
 class FewShotSeg(nn.Module):
     """
@@ -32,11 +35,71 @@ class FewShotSeg(nn.Module):
         self.encoder = nn.Sequential(OrderedDict([
             ('backbone', Encoder(in_channels, self.pretrained_path)),]))
 
+    def save_hard_samples(self, supp_imgs, qry_imgs, pred, gt_mask, hardness_score, save_path, 
+                          query_image_names, support_image_names):
+        """
+        Save hard samples to disk if hardness score exceeds the threshold.
+        """
+        os.makedirs(save_path, exist_ok=True)
 
-    def forward(self, supp_imgs, fore_mask, back_mask, qry_imgs):
+        # 🔍 Find the next available folder number
+        existing_folders = [int(name) for name in os.listdir(save_path) if name.isdigit()]
+        next_folder_num = max(existing_folders) + 1 if existing_folders else 1
+        sample_folder = os.path.join(save_path, str(next_folder_num))
+        
+        # Create directories for support and query
+        support_folder = os.path.join(sample_folder, 'support')
+        query_folder = os.path.join(sample_folder, 'query')
+        os.makedirs(support_folder, exist_ok=True)
+        os.makedirs(query_folder, exist_ok=True)
+
+        # Hardcoded directories for images and labels
+        image_dir = './VOCdevkit/VOC2012/JPEGImages'
+        label_dir = './VOCdevkit/VOC2012/SegmentationClassAug'  # Change if you are using SegmentationClass
+
+        # Save Query Images & Labels
+        for idx, (qry_img, qry_name, pred_img, gt_img, hardness) in enumerate(zip(
+                qry_imgs, query_image_names, pred, gt_mask, hardness_score)):
+            
+            # Extract the actual filename (removes path and extension)
+            qry_filename = os.path.splitext(os.path.basename(qry_name[0]))[0]
+
+            # Full paths for query image and label
+            query_image_path = os.path.join(image_dir, f'{qry_filename}.jpg')
+            query_label_path = os.path.join(label_dir, f'{qry_filename}.png')
+            
+            # Copy the original query image and its label to the query folder
+            shutil.copy(query_image_path, os.path.join(query_folder, f'{qry_filename}_query.jpg'))
+            shutil.copy(query_label_path, os.path.join(query_folder, f'{qry_filename}_gt.png'))
+
+            # Save the predicted mask as a .png image
+            pred_mask = pred_img[0].argmax(dim=0).detach().cpu().numpy().astype(np.uint8)
+            cv2.imwrite(os.path.join(query_folder, f'{qry_filename}_pred.png'), pred_mask)
+
+            # Save the hardness map as a grayscale .png image
+            hardness_map = hardness[0].detach().cpu().numpy()
+            hardness_map_normalized = cv2.normalize(hardness_map, None, 0, 255, cv2.NORM_MINMAX)
+            hardness_map_uint8 = hardness_map_normalized.astype(np.uint8)
+            cv2.imwrite(os.path.join(query_folder, f'{qry_filename}_hardness.png'), hardness_map_uint8)
+
+        # Save Support Images
+        for way_idx, way in enumerate(supp_imgs):
+            for shot_idx, (supp_img, supp_name) in enumerate(zip(way, support_image_names[way_idx])):
+                
+                # Extract the actual filename (removes path and extension)
+                supp_filename = os.path.splitext(os.path.basename(supp_name[0]))[0]
+
+                # Full path for support image
+                support_image_path = os.path.join(image_dir, f'{supp_filename}.jpg')
+                
+                # Copy the original support image to the support folder
+                shutil.copy(support_image_path, os.path.join(support_folder, f'{supp_filename}_support.jpg'))
+
+
+    def forward(self, supp_imgs, fore_mask, back_mask, qry_imgs, gt_mask, episode_num=None, query_image_names=None, support_image_names=None):
         """
         Args:
-            supp_imgs: support images
+            supp_imgs: support images`
                 way x shot x [B x 3 x H x W], list of lists of tensors
             fore_mask: foreground masks for support images
                 way x shot x [B x H x W], list of lists of tensors
@@ -88,13 +151,44 @@ class FewShotSeg(nn.Module):
             outputs.append(F.interpolate(pred, size=img_size, mode='bilinear'))
 
             ###### Prototype alignment loss ######
-            if self.config['align'] and self.training:
+            if self.config.get('model', {}).get('align', False) and self.training:
                 align_loss_epi = self.alignLoss(qry_fts[:, epi], pred, supp_fts[:, :, epi],
                                                 fore_mask[:, :, epi], back_mask[:, :, epi])
                 align_loss += align_loss_epi
 
         output = torch.stack(outputs, dim=1)  # N x B x (1 + Wa) x H x W
         output = output.view(-1, *output.shape[2:])
+
+        ###### New Code Block for Identifying Hard Samples ######
+        if self.training and gt_mask is not None:
+            # Get config settings
+            config = self.config.get('hard_sample_cfg', {})
+            conf_threshold = config.get('confidence_threshold', 0.6)
+            alpha = config.get('alpha', 1.0)
+            beta = config.get('beta', 0.5)
+            hardness_threshold = config.get('hardness_threshold', 0.7)
+            save_path = config.get('save_path', './hard_samples')
+            
+            # Calculate the predicted mask and confidence
+            pred_mask = torch.argmax(output, dim=1)  # N x H x W
+            softmax_output = torch.softmax(output, dim=1)  # N x C x H x W
+            confidence_map, _ = torch.max(softmax_output, dim=1)  # N x H x W
+
+            # Calculate misclassification map
+            misclassification_map = (pred_mask != gt_mask).float()  # N x H x W
+
+            # Calculate Hardness Score
+            hardness_score = (alpha * misclassification_map) + (beta * (1 - confidence_map))
+            average_hardness_score = torch.mean(hardness_score)
+
+            # Save hard samples if they meet the threshold
+            if average_hardness_score > hardness_threshold:
+                self.save_hard_samples(
+                    supp_imgs, qry_imgs, output, gt_mask, hardness_score, save_path,
+                    query_image_names, support_image_names
+                )
+        ###### End of New Code Block ######
+
         return output, align_loss / batch_size
 
 
