@@ -24,7 +24,7 @@ for source_file in sources_to_save:
 @ex.config
 def cfg():
     """Default configurations"""
-    input_size = (417, 417)
+    input_size = (320, 800)
     seed = 1234
     cuda_visable = '0, 1, 2, 3, 4, 5, 6, 7'
     gpu_id = 0
@@ -48,7 +48,7 @@ def cfg():
 
         task = {
             'n_ways': 1,
-            'n_shots': 1,
+            'n_shots': 5,
             'n_queries': 1,
         }
 
@@ -60,7 +60,8 @@ def cfg():
 
     elif mode == 'test':
         notrain = False
-        snapshot = './runs/PANet_VOC_sets_0_1way_1shot_[train]/1/snapshots/30000.pth'
+        snapshot = './runs/PANet_VOC_align_sets_0_1way_5shot_[train]/1/snapshots/30000.pth'
+        # snapshot = './test_model/PANet_VOC_sets_0_1way_5shot.pth'
         n_runs = 5
         n_steps = 1000
         batch_size = 1
@@ -101,10 +102,18 @@ def cfg():
         + [f'sets_{label_sets}', f'{task["n_ways"]}way_{task["n_shots"]}shot_[{mode}]'])
 
 
+    # path = {
+    #     'log_dir': './runs',
+    #     'init_path': './pretrained_model/vgg16-397923af.pth',
+    #     'VOC':{'data_dir': '../../data/Pascal/VOCdevkit/VOC2012/',
+    #            'data_split': 'trainaug',},
+    #     'COCO':{'data_dir': '../../data/COCO/',
+    #             'data_split': 'train',},
+    # }
     path = {
         'log_dir': './runs',
         'init_path': './pretrained_model/vgg16-397923af.pth',
-        'VOC':{'data_dir': '../../data/Pascal/VOCdevkit/VOC2012/',
+        'VOC':{'data_dir': './VOCdevkit/VOC2012/',
                'data_split': 'trainaug',},
         'COCO':{'data_dir': '../../data/COCO/',
                 'data_split': 'train',},
