@@ -36,7 +36,7 @@ def main(_run, _config, _log):
 
 
     _log.info('###### Create model ######')
-    model = FewShotSeg(pretrained_path=_config['path']['init_path'], cfg=_config['model'])
+    model = FewShotSeg(pretrained_path=_config['path']['init_path'], cfg=_config)
     model = nn.DataParallel(model.cuda(), device_ids=[_config['gpu_id'],])
     model.train()
 
@@ -94,10 +94,22 @@ def main(_run, _config, _log):
         query_labels = torch.cat(
             [query_label.long().cuda() for query_label in sample_batched['query_labels']], dim=0)
 
+        # Extract image names from the batch
+        query_image_names = sample_batched['query_filenames']  # This is already returned by the DataLoader
+        support_image_names = sample_batched['support_filenames']
+
         # Forward and Backward
         optimizer.zero_grad()
-        query_pred, align_loss = model(support_images, support_fg_mask, support_bg_mask,
-                                       query_images)
+        # query_pred, align_loss = model(support_images, support_fg_mask, support_bg_mask,
+        #                                query_images)
+        query_pred, align_loss = model(
+            support_images, support_fg_mask, support_bg_mask, 
+            query_images, gt_mask=query_labels,
+            query_image_names=query_image_names,
+            support_image_names=support_image_names
+        )
+
+
         query_loss = criterion(query_pred, query_labels)
         loss = query_loss + align_loss * _config['align_loss_scaler']
         loss.backward()
