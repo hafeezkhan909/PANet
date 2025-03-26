@@ -14,6 +14,46 @@ from .vgg import Encoder
 from PIL import Image
 import torchvision.transforms as T
 
+def visualize_prediction(image, prediction):
+    """
+    Overlay the segmentation prediction on the image.
+    Args:
+        image (np.ndarray): Original query image (H x W x 3).
+        prediction (np.ndarray): Predicted segmentation map (H x W).
+    Returns:
+        np.ndarray: Image with prediction overlay.
+    """
+    # Check if image is properly loaded
+    if image is None:
+        raise ValueError("Input image is None.")
+    
+    # Ensure the image is in RGB format (3 channels)
+    if len(image.shape) == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+
+    # Ensure prediction is a 2D array
+    if len(prediction.shape) != 2:
+        raise ValueError("Prediction mask must be a 2D array.")
+
+    # Automatically create a color map for all classes in prediction
+    num_classes = prediction.max() + 1
+    np.random.seed(0)  # For reproducibility
+    color_map = np.random.randint(0, 255, size=(num_classes, 3), dtype=np.uint8)
+    color_map[0] = [0, 0, 0]  # Ensure background is black
+
+    # Convert prediction mask to an RGB overlay
+    overlay = color_map[prediction]
+
+    # Resize the overlay to match the size of the input image (if necessary)
+    if overlay.shape[:2] != image.shape[:2]:
+        overlay = cv2.resize(overlay, (image.shape[1], image.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+    # Blend the original image and the overlay
+    blended = cv2.addWeighted(image, 0.7, overlay, 0.3, 0)
+
+    return blended
+
+
 class FewShotSeg(nn.Module):
     """
     Fewshot Segmentation model
@@ -35,14 +75,14 @@ class FewShotSeg(nn.Module):
         self.encoder = nn.Sequential(OrderedDict([
             ('backbone', Encoder(in_channels, self.pretrained_path)),]))
 
-    def save_hard_samples(self, supp_imgs, qry_imgs, pred, gt_mask, hardness_score, save_path, 
-                          query_image_names, support_image_names):
+    def save_hard_samples(self, supp_imgs, qry_imgs, pred, gt_mask, save_path, 
+                      query_image_names, support_image_names, img_size):
         """
         Save hard samples to disk if hardness score exceeds the threshold.
         """
         os.makedirs(save_path, exist_ok=True)
 
-        # 🔍 Find the next available folder number
+        # Find the next available folder number
         existing_folders = [int(name) for name in os.listdir(save_path) if name.isdigit()]
         next_folder_num = max(existing_folders) + 1 if existing_folders else 1
         sample_folder = os.path.join(save_path, str(next_folder_num))
@@ -55,11 +95,11 @@ class FewShotSeg(nn.Module):
 
         # Hardcoded directories for images and labels
         image_dir = './VOCdevkit/VOC2012/JPEGImages'
-        label_dir = './VOCdevkit/VOC2012/SegmentationClassAug'  # Change if you are using SegmentationClass
+        label_dir = './VOCdevkit/VOC2012/SegmentationClassAug'
 
         # Save Query Images & Labels
-        for idx, (qry_img, qry_name, pred_img, gt_img, hardness) in enumerate(zip(
-                qry_imgs, query_image_names, pred, gt_mask, hardness_score)):
+        for idx, (qry_img, qry_name, pred_img, gt_img) in enumerate(zip(
+                qry_imgs, query_image_names, pred, gt_mask)):
             
             # Extract the actual filename (removes path and extension)
             qry_filename = os.path.splitext(os.path.basename(qry_name[0]))[0]
@@ -68,19 +108,34 @@ class FewShotSeg(nn.Module):
             query_image_path = os.path.join(image_dir, f'{qry_filename}.jpg')
             query_label_path = os.path.join(label_dir, f'{qry_filename}.png')
             
-            # Copy the original query image and its label to the query folder
+            # Load original query image for visualization
+            query_img_np = cv2.imread(query_image_path)
+            
+            # Save original query image and label
             shutil.copy(query_image_path, os.path.join(query_folder, f'{qry_filename}_query.jpg'))
             shutil.copy(query_label_path, os.path.join(query_folder, f'{qry_filename}_gt.png'))
 
-            # Save the predicted mask as a .png image
-            pred_mask = pred_img[0].argmax(dim=0).detach().cpu().numpy().astype(np.uint8)
-            cv2.imwrite(os.path.join(query_folder, f'{qry_filename}_pred.png'), pred_mask)
+            # Extract prediction mask - Ensure it's converted to a 2D array
+            if pred_img.dim() == 4:  # This means it's shaped like (N, C, H, W)
+                pred_mask = pred_img[0].argmax(dim=0).detach().cpu().numpy().astype(np.uint8)
+            elif pred_img.dim() == 3:  # This means it's shaped like (C, H, W)
+                pred_mask = pred_img.argmax(dim=0).detach().cpu().numpy().astype(np.uint8)
+            elif pred_img.dim() == 2:  # This is already a 2D array
+                pred_mask = pred_img.detach().cpu().numpy().astype(np.uint8)
+            else:
+                raise ValueError(f"Unexpected prediction image shape: {pred_img.shape}")
+            
+            # Generate Black Image Overlay
+            black_img = np.zeros_like(query_img_np)
+            overlayed_black_image = visualize_prediction(black_img, pred_mask)
+            cv2.imwrite(os.path.join(query_folder, f'{qry_filename}_pred_black_overlay.png'), overlayed_black_image)
+            
+            # Generate Original Image Overlay
+            overlayed_query_image = visualize_prediction(query_img_np, pred_mask)
+            cv2.imwrite(os.path.join(query_folder, f'{qry_filename}_pred_original_overlay.png'), overlayed_query_image)
 
-            # Save the hardness map as a grayscale .png image
-            hardness_map = hardness[0].detach().cpu().numpy()
-            hardness_map_normalized = cv2.normalize(hardness_map, None, 0, 255, cv2.NORM_MINMAX)
-            hardness_map_uint8 = hardness_map_normalized.astype(np.uint8)
-            cv2.imwrite(os.path.join(query_folder, f'{qry_filename}_hardness.png'), hardness_map_uint8)
+            # Save the predicted mask
+            # cv2.imwrite(os.path.join(query_folder, f'{qry_filename}_pred.png'), pred_mask)
 
         # Save Support Images
         for way_idx, way in enumerate(supp_imgs):
@@ -184,8 +239,8 @@ class FewShotSeg(nn.Module):
             # Save hard samples if they meet the threshold
             if average_hardness_score > hardness_threshold:
                 self.save_hard_samples(
-                    supp_imgs, qry_imgs, output, gt_mask, hardness_score, save_path,
-                    query_image_names, support_image_names
+                    supp_imgs, qry_imgs, output, gt_mask, save_path,
+                    query_image_names, support_image_names, img_size
                 )
         ###### End of New Code Block ######
 
