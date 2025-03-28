@@ -82,45 +82,45 @@ class FewShotSeg(nn.Module):
         """
         os.makedirs(save_path, exist_ok=True)
 
-        # Find the next available folder number
-        existing_folders = [int(name) for name in os.listdir(save_path) if name.isdigit()]
-        next_folder_num = max(existing_folders) + 1 if existing_folders else 1
-        sample_folder = os.path.join(save_path, str(next_folder_num))
-        
-        # Create directories for support and query
-        support_folder = os.path.join(sample_folder, 'support')
-        query_folder = os.path.join(sample_folder, 'query')
-        os.makedirs(support_folder, exist_ok=True)
-        os.makedirs(query_folder, exist_ok=True)
-
-        # Hardcoded directories for images and labels
-        image_dir = './VOCdevkit/VOC2012/JPEGImages'
-        label_dir = './VOCdevkit/VOC2012/SegmentationClassAug'
-
-        # Save Query Images & Labels
         for idx, (qry_img, qry_name, pred_img, gt_img) in enumerate(zip(
                 qry_imgs, query_image_names, pred, gt_mask)):
             
             # Extract the actual filename (removes path and extension)
             qry_filename = os.path.splitext(os.path.basename(qry_name[0]))[0]
+            sample_folder = os.path.join(save_path, qry_filename)
+
+            # Check if folder already exists for this query image to avoid duplication
+            if os.path.exists(sample_folder):
+                print(f"Sample '{qry_filename}' already exists. Skipping save.")
+                continue
+
+            # Create directories for support and query
+            support_folder = os.path.join(sample_folder, 'support')
+            query_folder = os.path.join(sample_folder, 'query')
+            os.makedirs(support_folder, exist_ok=True)
+            os.makedirs(query_folder, exist_ok=True)
+
+            # Hardcoded directories for images and labels
+            image_dir = './VOCdevkit/VOC2012/JPEGImages'
+            label_dir = './VOCdevkit/VOC2012/SegmentationClassAug'
 
             # Full paths for query image and label
             query_image_path = os.path.join(image_dir, f'{qry_filename}.jpg')
             query_label_path = os.path.join(label_dir, f'{qry_filename}.png')
-            
+
             # Load original query image for visualization
             query_img_np = cv2.imread(query_image_path)
-            
+
             # Save original query image and label
             shutil.copy(query_image_path, os.path.join(query_folder, f'{qry_filename}_query.jpg'))
             shutil.copy(query_label_path, os.path.join(query_folder, f'{qry_filename}_gt.png'))
 
-            # Extract prediction mask - Ensure it's converted to a 2D array
-            if pred_img.dim() == 4:  # This means it's shaped like (N, C, H, W)
+            # Extract prediction mask
+            if pred_img.dim() == 4:
                 pred_mask = pred_img[0].argmax(dim=0).detach().cpu().numpy().astype(np.uint8)
-            elif pred_img.dim() == 3:  # This means it's shaped like (C, H, W)
+            elif pred_img.dim() == 3:
                 pred_mask = pred_img.argmax(dim=0).detach().cpu().numpy().astype(np.uint8)
-            elif pred_img.dim() == 2:  # This is already a 2D array
+            elif pred_img.dim() == 2:
                 pred_mask = pred_img.detach().cpu().numpy().astype(np.uint8)
             else:
                 raise ValueError(f"Unexpected prediction image shape: {pred_img.shape}")
@@ -129,26 +129,19 @@ class FewShotSeg(nn.Module):
             black_img = np.zeros_like(query_img_np)
             overlayed_black_image = visualize_prediction(black_img, pred_mask)
             cv2.imwrite(os.path.join(query_folder, f'{qry_filename}_pred_black_overlay.png'), overlayed_black_image)
-            
+
             # Generate Original Image Overlay
             overlayed_query_image = visualize_prediction(query_img_np, pred_mask)
             cv2.imwrite(os.path.join(query_folder, f'{qry_filename}_pred_original_overlay.png'), overlayed_query_image)
 
-            # Save the predicted mask
-            # cv2.imwrite(os.path.join(query_folder, f'{qry_filename}_pred.png'), pred_mask)
+            # Save Support Images
+            for way_idx, way in enumerate(supp_imgs):
+                for shot_idx, (supp_img, supp_name) in enumerate(zip(way, support_image_names[way_idx])):
+                    supp_filename = os.path.splitext(os.path.basename(supp_name[0]))[0]
+                    support_image_path = os.path.join(image_dir, f'{supp_filename}.jpg')
+                    shutil.copy(support_image_path, os.path.join(support_folder, f'{supp_filename}_support.jpg'))
 
-        # Save Support Images
-        for way_idx, way in enumerate(supp_imgs):
-            for shot_idx, (supp_img, supp_name) in enumerate(zip(way, support_image_names[way_idx])):
-                
-                # Extract the actual filename (removes path and extension)
-                supp_filename = os.path.splitext(os.path.basename(supp_name[0]))[0]
-
-                # Full path for support image
-                support_image_path = os.path.join(image_dir, f'{supp_filename}.jpg')
-                
-                # Copy the original support image to the support folder
-                shutil.copy(support_image_path, os.path.join(support_folder, f'{supp_filename}_support.jpg'))
+            print(f"Sample '{qry_filename}' saved successfully.")
 
 
     def forward(self, supp_imgs, fore_mask, back_mask, qry_imgs, gt_mask, episode_num=None, query_image_names=None, support_image_names=None):
@@ -218,10 +211,10 @@ class FewShotSeg(nn.Module):
         if self.training and gt_mask is not None:
             # Get config settings
             config = self.config.get('hard_sample_cfg', {})
-            conf_threshold = config.get('confidence_threshold', 0.6)
+            conf_threshold = config.get('confidence_threshold', 0.1)
             alpha = config.get('alpha', 1.0)
-            beta = config.get('beta', 0.5)
-            hardness_threshold = config.get('hardness_threshold', 0.7)
+            beta = config.get('beta', 1.0)
+            hardness_threshold = config.get('hardness_threshold', 0.1)
             save_path = config.get('save_path', './hard_samples')
             
             # Calculate the predicted mask and confidence
@@ -234,17 +227,28 @@ class FewShotSeg(nn.Module):
 
             # Calculate Hardness Score
             hardness_score = (alpha * misclassification_map) + (beta * (1 - confidence_map))
-            average_hardness_score = torch.mean(hardness_score)
+            # average_hardness_score = torch.mean(hardness_score)
+            # Define a pixel-wise hardness threshold
+            pixel_hardness_threshold = 0.1
 
-            # Save hard samples if they meet the threshold
-            if average_hardness_score > hardness_threshold:
+            # Count pixels with high hardness scores
+            hard_pixel_count = torch.sum(hardness_score > pixel_hardness_threshold).item()
+
+            # Calculate proportion of hard pixels
+            total_pixels = hardness_score.numel()
+            hard_pixel_ratio = hard_pixel_count / total_pixels
+
+            # Decide if the sample is hard based on this ratio
+            hard_sample_detected = hard_pixel_ratio > hardness_threshold  # Keep hardness_threshold = 0.1 for now
+
+            if hard_sample_detected:
                 self.save_hard_samples(
                     supp_imgs, qry_imgs, output, gt_mask, save_path,
                     query_image_names, support_image_names, img_size
                 )
         ###### End of New Code Block ######
 
-        return output, align_loss / batch_size
+        return output, align_loss / batch_size, hard_sample_detected
 
 
     def calDist(self, fts, prototype, scaler=20):
